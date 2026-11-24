@@ -7,42 +7,59 @@ app = Flask(__name__)
 CORS(app)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-def call_gemini(model, text):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-    prompt = (
-        "You are MMM Nexus AI, created by founder Murali Mohan. "
-        "Answer clearly, warmly, and helpfully in the same language the user asks "
-        "(Telugu, English, or Tenglish): " + text
-    )
-    res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=25)
-    return res.json()
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "MMM Nexus Backend v1.0 is Live!"})
+    return jsonify({"status": "MMM Nexus Backend is Live!"})
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "Server API Key missing"}), 500
-
-    data = request.get_json() or {}
-    text = data.get("message", "").strip()
-    if not text:
-        return jsonify({"error": "Empty message"}), 400
-
     try:
-        result = call_gemini("gemini-3.5-flash-lite", text)
-        if "error" in result:
-            result = call_gemini("gemini-3.5-flash", text)
+        data = request.get_json()
+        user_msg = data.get("message", "")
+        image_base64 = data.get("image", None)
+        mime_type = data.get("mimeType", "image/jpeg")
 
-        reply = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-        if reply:
+        if not user_msg and not image_base64:
+            return jsonify({"error": "Empty message"}), 400
+
+        parts = []
+        if user_msg:
+            parts.append({"text": user_msg})
+        else:
+            parts.append({"text": "Analyze this image in detail."})
+
+        if image_base64:
+            parts.append({
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": image_base64
+                }
+            })
+
+        payload = {
+            "systemInstruction": {
+                "parts": [{
+                    "text": "You are MMM Nexus AI, a smart, helpful personal AI assistant created by Murali Mohan. Reply clearly in the user's language (Telugu or English)."
+                }]
+            },
+            "contents": [{"parts": parts}]
+        }
+
+        res = requests.post(GEMINI_URL, json=payload, timeout=30)
+        res_data = res.json()
+
+        if "candidates" in res_data:
+            reply = res_data["candidates"][0]["content"]["parts"][0]["text"]
             return jsonify({"reply": reply})
-        return jsonify({"error": result.get("error", {}).get("message", "Try again")}), 500
+        else:
+            err_msg = res_data.get("error", {}).get("message", "AI response error")
+            return jsonify({"error": err_msg}), 500
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(host="0.0.0.0", port=10000)
+        
