@@ -7,7 +7,8 @@ app = Flask(__name__)
 CORS(app)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+TEXT_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+IMAGE_URL = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
 
 @app.route("/", methods=["GET"])
 def home():
@@ -47,7 +48,7 @@ def chat():
             "contents": [{"parts": parts}]
         }
 
-        res = requests.post(GEMINI_URL, json=payload, timeout=30)
+        res = requests.post(TEXT_URL, json=payload, timeout=30)
         res_data = res.json()
 
         if "candidates" in res_data:
@@ -60,6 +61,32 @@ def chat():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/generate-image", methods=["POST"])
+def generate_image():
+    try:
+        data = request.get_json()
+        prompt_text = data.get("prompt", "")
+        if not prompt_text:
+            return jsonify({"error": "Prompt is empty"}), 400
+
+        payload = {
+            "instances": [{"prompt": prompt_text}],
+            "parameters": {"sampleCount": 1}
+        }
+
+        res = requests.post(IMAGE_URL, json=payload, timeout=45)
+        res_data = res.json()
+
+        if "predictions" in res_data and len(res_data["predictions"]) > 0:
+            b64_img = res_data["predictions"][0]["bytesBase64Encoded"]
+            return jsonify({"image": f"data:image/jpeg;base64,{b64_img}"})
+        else:
+            err_msg = res_data.get("error", {}).get("message", "Image generation failed")
+            return jsonify({"error": err_msg}), 500
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-        
+                           
