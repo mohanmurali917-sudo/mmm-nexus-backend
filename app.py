@@ -7,86 +7,91 @@ app = Flask(__name__)
 CORS(app)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-TEXT_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-IMAGE_URL = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
+
+SYSTEM_PROMPT = (
+    "You are MMM Nexus AI, an intelligent, friendly, and helpful AI assistant created by your visionary founder, Murali Mohan. "
+    "Always reply naturally in the user's language (Telugu, English, or Tenglish). "
+    "Keep answers clear, accurate, and engaging."
+)
+
+TEXT_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-2.5-flash-lite"
+]
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "MMM Nexus Backend is Live!"})
+    return jsonify({"status": "MMM Nexus Backend Live", "creator": "Murali Mohan"})
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    try:
-        data = request.get_json()
-        user_msg = data.get("message", "")
-        image_base64 = data.get("image", None)
-        mime_type = data.get("mimeType", "image/jpeg")
+    if not GEMINI_API_KEY:
+        return jsonify({"error": "GEMINI_API_KEY missing on server."}), 500
 
-        if not user_msg and not image_base64:
-            return jsonify({"error": "Empty message"}), 400
+    data = request.get_json() or {}
+    user_msg = data.get("message", "").strip()
+    img_b64 = data.get("image")
+    mime_type = data.get("mimeType", "image/jpeg")
 
-        parts = []
-        if user_msg:
-            parts.append({"text": user_msg})
-        else:
-            parts.append({"text": "Analyze this image in detail."})
+    if not user_msg and not img_b64:
+        return jsonify({"error": "Empty message"}), 400
 
-        if image_base64:
-            parts.append({
-                "inline_data": {
-                    "mime_type": mime_type,
-                    "data": image_base64
-                }
-            })
+    parts = []
+    if img_b64:
+        parts.append({"inline_data": {"mime_type": mime_type, "data": img_b64}})
+    if user_msg:
+        parts.append({"text": user_msg})
 
-        payload = {
-            "systemInstruction": {
-                "parts": [{
-                    "text": "You are MMM Nexus AI, a smart, helpful personal AI assistant created by Murali Mohan. Reply clearly in the user's language (Telugu or English)."
-                }]
-            },
-            "contents": [{"parts": parts}]
-        }
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": parts}]
+    }
 
-        res = requests.post(TEXT_URL, json=payload, timeout=30)
-        res_data = res.json()
+    last_error = "Server busy, please try again."
+    for model in TEXT_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(url, json=payload, timeout=60)
+            res_json = res.json()
+            if res.status_code == 200 and "candidates" in res_json:
+                reply = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                return jsonify({"reply": reply, "model": model})
+            else:
+                err_msg = res_json.get("error", {}).get("message", f"HTTP {res.status_code}")
+                last_error = err_msg
+        except Exception as e:
+            last_error = str(e)
 
-        if "candidates" in res_data:
-            reply = res_data["candidates"][0]["content"]["parts"][0]["text"]
-            return jsonify({"reply": reply})
-        else:
-            err_msg = res_data.get("error", {}).get("message", "AI response error")
-            return jsonify({"error": err_msg}), 500
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"error": last_error}), 503
 
 @app.route("/generate-image", methods=["POST"])
 def generate_image():
+    if not GEMINI_API_KEY:
+        return jsonify({"error": "GEMINI_API_KEY missing on server."}), 500
+
+    data = request.get_json() or {}
+    prompt = data.get("prompt", "").strip()
+    if not prompt:
+        return jsonify({"error": "Prompt is required"}), 400
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
+    payload = {
+        "instances": [{"prompt": prompt}],
+        "parameters": {"sampleCount": 1}
+    }
+
     try:
-        data = request.get_json()
-        prompt_text = data.get("prompt", "")
-        if not prompt_text:
-            return jsonify({"error": "Prompt is empty"}), 400
-
-        payload = {
-            "instances": [{"prompt": prompt_text}],
-            "parameters": {"sampleCount": 1}
-        }
-
-        res = requests.post(IMAGE_URL, json=payload, timeout=45)
-        res_data = res.json()
-
-        if "predictions" in res_data and len(res_data["predictions"]) > 0:
-            b64_img = res_data["predictions"][0]["bytesBase64Encoded"]
+        res = requests.post(url, json=payload, timeout=60)
+        res_json = res.json()
+        if res.status_code == 200 and "predictions" in res_json:
+            b64_img = res_json["predictions"][0]["bytesBase64Encoded"]
             return jsonify({"image": f"data:image/jpeg;base64,{b64_img}"})
-        else:
-            err_msg = res_data.get("error", {}).get("message", "Image generation failed")
-            return jsonify({"error": err_msg}), 500
-
+        err_msg = res_json.get("error", {}).get("message", "Image generation failed")
+        return jsonify({"error": err_msg}), res.status_code
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
-                           
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
