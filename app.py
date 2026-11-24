@@ -20,6 +20,11 @@ TEXT_MODELS = [
     "gemini-2.5-flash-lite"
 ]
 
+IMAGE_MODELS = [
+    "gemini-2.5-flash-image",
+    "gemini-2.0-flash-exp-image-generation"
+]
+
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({"status": "MMM Nexus Backend Live", "creator": "Murali Mohan"})
@@ -57,9 +62,7 @@ def chat():
             if res.status_code == 200 and "candidates" in res_json:
                 reply = res_json["candidates"][0]["content"]["parts"][0]["text"]
                 return jsonify({"reply": reply, "model": model})
-            else:
-                err_msg = res_json.get("error", {}).get("message", f"HTTP {res.status_code}")
-                last_error = err_msg
+            last_error = res_json.get("error", {}).get("message", f"HTTP {res.status_code}")
         except Exception as e:
             last_error = str(e)
 
@@ -75,22 +78,29 @@ def generate_image():
     if not prompt:
         return jsonify({"error": "Prompt is required"}), 400
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={GEMINI_API_KEY}"
     payload = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {"sampleCount": 1}
+        "contents": [{"parts": [{"text": f"Generate a high quality image of: {prompt}"}]}],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}
     }
 
-    try:
-        res = requests.post(url, json=payload, timeout=60)
-        res_json = res.json()
-        if res.status_code == 200 and "predictions" in res_json:
-            b64_img = res_json["predictions"][0]["bytesBase64Encoded"]
-            return jsonify({"image": f"data:image/jpeg;base64,{b64_img}"})
-        err_msg = res_json.get("error", {}).get("message", "Image generation failed")
-        return jsonify({"error": err_msg}), res.status_code
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    last_error = "Image generation failed"
+    for model in IMAGE_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(url, json=payload, timeout=60)
+            res_json = res.json()
+            if res.status_code == 200 and "candidates" in res_json:
+                parts = res_json["candidates"][0].get("content", {}).get("parts", [])
+                for p in parts:
+                    inline = p.get("inlineData") or p.get("inline_data")
+                    if inline and inline.get("data"):
+                        mime = inline.get("mimeType") or inline.get("mime_type") or "image/jpeg"
+                        return jsonify({"image": f"data:{mime};base64,{inline['data']}"})
+            last_error = res_json.get("error", {}).get("message", f"HTTP {res.status_code}")
+        except Exception as e:
+            last_error = str(e)
+
+    return jsonify({"error": last_error}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
